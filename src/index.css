@@ -28,6 +28,9 @@ body {
   padding: 1rem 2rem;
   box-shadow: 0 2px 20px rgba(0, 0, 0, 0.1);
   z-index: 1000;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .app-title {
@@ -35,6 +38,23 @@ body {
   font-weight: 600;
   color: #333;
   text-align: center;
+}
+
+.save-button {
+  background-color: #667eea;
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.save-button:hover {
+  background-color: #764ba2;
 }
 
 .whiteboard-container {
