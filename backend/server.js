@@ -134,6 +134,13 @@ function performSpatialAnalysis(wordAnnotations) {
   // Analyze each equation for mathematical structure
   const analyzedEquations = equations.map(equation => analyzeEquation(equation));
   
+  console.log(`Spatial analysis found ${equations.length} equations:`);
+  analyzedEquations.forEach((eq, index) => {
+    console.log(`  Equation ${index}: "${eq.reconstructedText}" (type: ${eq.type})`);
+    console.log(`    Elements: ${eq.originalElements.map(el => `"${el.text}"`).join(', ')}`);
+    console.log(`    Y-range: ${Math.round(eq.boundingBox.y_min)} to ${Math.round(eq.boundingBox.y_max)}`);
+  });
+  
   return {
     totalElements: wordAnnotations.length,
     equations: analyzedEquations,
@@ -216,9 +223,12 @@ function createVerticalTextOrder(wordAnnotations) {
   console.log('Creating vertical text order...');
   
   // Sort all annotations by Y coordinate (top to bottom), then by X coordinate (left to right)
+  // Use a more robust sorting that accounts for reading order
   const sortedAnnotations = [...wordAnnotations].sort((a, b) => {
     const yDiff = a.center_y - b.center_y;
-    if (Math.abs(yDiff) < 25) { // If on roughly the same line (within 25px)
+    const yTolerance = 30; // Slightly larger tolerance
+    
+    if (Math.abs(yDiff) < yTolerance) { // If on roughly the same line
       return a.center_x - b.center_x; // Sort left to right
     }
     return yDiff; // Sort top to bottom
@@ -228,9 +238,10 @@ function createVerticalTextOrder(wordAnnotations) {
   const lines = [];
   let currentLine = [];
   let lastY = null;
+  const lineGroupingTolerance = 35; // Larger tolerance for grouping into lines
   
   sortedAnnotations.forEach(annotation => {
-    if (lastY === null || Math.abs(annotation.center_y - lastY) < 25) {
+    if (lastY === null || Math.abs(annotation.center_y - lastY) < lineGroupingTolerance) {
       // Same line or first annotation
       currentLine.push(annotation.text);
       lastY = annotation.center_y;
@@ -250,6 +261,10 @@ function createVerticalTextOrder(wordAnnotations) {
   }
   
   console.log('Vertical text order created:', lines);
+  console.log('Individual annotations with coordinates:');
+  sortedAnnotations.forEach((annotation, index) => {
+    console.log(`  ${index}: "${annotation.text}" at Y=${Math.round(annotation.center_y)}, X=${Math.round(annotation.center_x)}`);
+  });
   
   return {
     linesInOrder: lines,
@@ -427,18 +442,21 @@ You are an expert math tutor reviewing a student's work on a whiteboard. The stu
 STUDENT'S WORK (in order from top to bottom):
 ${verticalTextOrder.linesInOrder.map((line, index) => `Step ${index + 1}: ${line}`).join('\n')}
 
-Treat this as a brandnew screen shot and analyze top down from scatch. Don't take into considiration jsons or screenshots before this
+The MOST RECENT step is: "${verticalTextOrder.linesInOrder[verticalTextOrder.linesInOrder.length - 1]}"
+
+ANALYZE ONLY THE MOST RECENT STEP. Ignore all previous steps unless the most recent step has an error.
 
 CRITICAL INSTRUCTIONS:
 
+1. **ONLY analyze the most recent step**: "${verticalTextOrder.linesInOrder[verticalTextOrder.linesInOrder.length - 1]}"
 
-2. **Read the math carefully** - Make sure you understand what the student actually wrote before commenting.
+2. **If the most recent step is correct, return empty array []** - Do not comment on earlier steps.
 
-3. **Follow the logical progression** - Each line builds on the previous one. Check if their steps make mathematical sense.
+3. **Only comment if the most recent step has an error** - Check if it follows logically from the previous step.
 
-4. **Maximum 1 comment** - Only the most important feedback.
+4. **When highlighting text, use EXACT text from the most recent step** - Never highlight text from earlier steps.
 
-5. **Be specific and brief** - Point to exactly what needs fixing, not general advice.
+5. **Associate feedback with the LAST equation (highest index)** - Use the equation containing the most recent step.
 
 6. If they are stuck help guide them towards the next step, but never give them the answer 
 
@@ -511,24 +529,35 @@ OUTPUT ONLY THE JSON ARRAY, NO OTHER TEXT.`;
       let arrowEnd = null;
       let highlightRegion = null;
       
-      if (suggestion.associatedEquation !== null && 
-          suggestion.associatedEquation !== undefined &&
-          spatialAnalysis.equations[suggestion.associatedEquation]) {
+      // If associatedEquation is provided, use it; otherwise default to the last (most recent) equation
+      let targetEquationIndex = suggestion.associatedEquation;
+      if (targetEquationIndex === null || targetEquationIndex === undefined || targetEquationIndex >= spatialAnalysis.equations.length) {
+        targetEquationIndex = spatialAnalysis.equations.length - 1; // Default to last equation
+      }
+      
+      if (targetEquationIndex >= 0 && spatialAnalysis.equations[targetEquationIndex]) {
         // Position near the specific equation
-        const equation = spatialAnalysis.equations[suggestion.associatedEquation];
-        const equationCenter = {
-          center_x: (equation.boundingBox.x_min + equation.boundingBox.x_max) / 2,
-          center_y: (equation.boundingBox.y_min + equation.boundingBox.y_max) / 2,
-          bbox: equation.boundingBox
-        };
+        const equation = spatialAnalysis.equations[targetEquationIndex];
         
         if (coordinateMapping) {
-          const equationTldraw = convertImageToTldrawCoords(equationCenter, coordinateMapping);
+          // Use the average Y coordinate of actual text elements for better alignment
+          const avgTextY = equation.originalElements.reduce((sum, el) => sum + el.center_y, 0) / equation.originalElements.length;
           
-          // Position suggestion to the right of the equation with some offset
+          // Find the rightmost text element for precise positioning
+          const rightmostElement = equation.originalElements.reduce((rightmost, element) => 
+            element.bbox.x_max > rightmost.bbox.x_max ? element : rightmost
+          );
+          
+          // Position suggestion directly to the right of the actual rightmost text
+          const textRightEdge = convertImageToTldrawCoords({
+            center_x: rightmostElement.bbox.x_max,
+            center_y: avgTextY,
+            bbox: rightmostElement.bbox
+          }, coordinateMapping);
+          
           tldraw_coords = {
-            x: equationTldraw.center_x + 200, // Right of equation
-            y: equationTldraw.center_y - 25 + (index * 80) // Slight offset up, stacked if multiple
+            x: textRightEdge.center_x + 10, // Very small gap from actual text edge
+            y: textRightEdge.center_y // Aligned with average text center Y
           };
           
           // Create highlight region for the equation or specific text being referenced
@@ -543,7 +572,7 @@ OUTPUT ONLY THE JSON ARRAY, NO OTHER TEXT.`;
                 bbox: equation.boundingBox
               }, coordinateMapping).bbox,
               padding: 15,
-              equationIndex: suggestion.associatedEquation
+              equationIndex: targetEquationIndex
             };
           } else {
             // Highlight the entire equation
@@ -560,14 +589,33 @@ OUTPUT ONLY THE JSON ARRAY, NO OTHER TEXT.`;
           }
         }
       } else {
-        // For general suggestions, position them at the bottom of the whiteboard area
-        const baseX = coordinateMapping ? coordinateMapping.tldrawBounds.x + 50 : 50;
-        const baseY = coordinateMapping ? coordinateMapping.tldrawBounds.y + coordinateMapping.tldrawBounds.height - 100 : 600;
-        
-        tldraw_coords = {
-          x: baseX + (index * 250),
-          y: baseY + (index * 60)
-        };
+        // For general suggestions, position them to the right of the rightmost content
+        if (coordinateMapping && spatialAnalysis.equations.length > 0) {
+          // Find the rightmost equation
+          const rightmostEquation = spatialAnalysis.equations.reduce((rightmost, eq) => 
+            eq.boundingBox.x_max > rightmost.boundingBox.x_max ? eq : rightmost
+          );
+          
+          const rightmostTldraw = convertImageToTldrawCoords({
+            center_x: rightmostEquation.boundingBox.x_max,
+            center_y: rightmostEquation.boundingBox.y_min,
+            bbox: rightmostEquation.boundingBox
+          }, coordinateMapping);
+          
+          tldraw_coords = {
+            x: rightmostTldraw.center_x + 30,
+            y: rightmostTldraw.center_y + (index * 50)
+          };
+        } else {
+          // Fallback positioning
+          const baseX = coordinateMapping ? coordinateMapping.tldrawBounds.x + 50 : 50;
+          const baseY = coordinateMapping ? coordinateMapping.tldrawBounds.y + 50 : 50;
+          
+          tldraw_coords = {
+            x: baseX + (index * 250),
+            y: baseY + (index * 60)
+          };
+        }
       }
       
       // Add the text suggestion with highlight information
