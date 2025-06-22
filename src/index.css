@@ -40,6 +40,12 @@ body {
   text-align: center;
 }
 
+.button-group {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
 .save-button {
   background-color: #667eea;
   color: white;
@@ -55,6 +61,49 @@ body {
 
 .save-button:hover {
   background-color: #764ba2;
+}
+
+.save-button:disabled {
+  background-color: #cccccc;
+  color: #666666;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.save-button:disabled:hover {
+  background-color: #cccccc;
+}
+
+.save-text-button {
+  background-color: #28a745;
+}
+
+.save-text-button:hover {
+  background-color: #218838;
+}
+
+.save-png-button {
+  background-color: #ffc107;
+  color: #212529;
+}
+
+.save-png-button:hover {
+  background-color: #e0a800;
+}
+
+.analyze-button {
+  background-color: #17a2b8;
+}
+
+.analyze-button:hover {
+  background-color: #138496;
+}
+
+.save-text-button:disabled {
+  background-color: #cccccc;
+  color: #666666;
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .whiteboard-container {
