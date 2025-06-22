@@ -75,15 +75,23 @@ app.post('/api/ocr-vision', async (req, res) => {
       // Spatial Analysis for Mathematical Expressions
       const spatialAnalysis = performSpatialAnalysis(wordAnnotations);
 
+      // Create vertical text order for easier AI model reading
+      const verticalTextOrder = createVerticalTextOrder(wordAnnotations);
+
       console.log('Full text detected:', fullText);
       console.log('Spatial analysis completed');
       
       // Generate AI suggestions using Gemini
       console.log('Generating AI suggestions with Gemini...');
-      const aiSuggestions = await generateAISuggestions(fullText, spatialAnalysis, wordAnnotations, coordinateMapping);
+      
+      const aiSuggestions = await generateAISuggestions(fullText, spatialAnalysis, wordAnnotations, coordinateMapping, verticalTextOrder);
       console.log('AI suggestions generated:', aiSuggestions.length);
       
       const responseData = {
+        // Easy-to-read section for AI model
+        verticalTextOrder: verticalTextOrder,
+        
+        // Detailed technical data
         fullText: fullText,
         wordAnnotations: wordAnnotations,
         spatialAnalysis: spatialAnalysis,
@@ -203,35 +211,194 @@ function analyzeEquation(equationElements) {
   };
 }
 
+// Create vertical text order for easier AI model reading
+function createVerticalTextOrder(wordAnnotations) {
+  console.log('Creating vertical text order...');
+  
+  // Sort all annotations by Y coordinate (top to bottom), then by X coordinate (left to right)
+  const sortedAnnotations = [...wordAnnotations].sort((a, b) => {
+    const yDiff = a.center_y - b.center_y;
+    if (Math.abs(yDiff) < 25) { // If on roughly the same line (within 25px)
+      return a.center_x - b.center_x; // Sort left to right
+    }
+    return yDiff; // Sort top to bottom
+  });
+  
+  // Group into lines for better readability
+  const lines = [];
+  let currentLine = [];
+  let lastY = null;
+  
+  sortedAnnotations.forEach(annotation => {
+    if (lastY === null || Math.abs(annotation.center_y - lastY) < 25) {
+      // Same line or first annotation
+      currentLine.push(annotation.text);
+      lastY = annotation.center_y;
+    } else {
+      // New line
+      if (currentLine.length > 0) {
+        lines.push(currentLine.join(' '));
+      }
+      currentLine = [annotation.text];
+      lastY = annotation.center_y;
+    }
+  });
+  
+  // Add the last line
+  if (currentLine.length > 0) {
+    lines.push(currentLine.join(' '));
+  }
+  
+  console.log('Vertical text order created:', lines);
+  
+  return {
+    linesInOrder: lines,
+    totalLines: lines.length,
+    fullTextInOrder: lines.join('\n'),
+    summary: `Content appears to contain ${lines.length} line(s) of text, reading from top to bottom.`
+  };
+}
+
 // Simplified coordinate conversion - direct mapping from image to tldraw
 function convertImageToTldrawCoords(annotation, coordinateMapping) {
-  const { imageWidth, imageHeight } = coordinateMapping;
+  const { imageWidth, imageHeight, tldrawBounds, exportScale } = coordinateMapping;
   
-  // Simple 1:1 scale mapping with fixed offset
-  // Since we're using fixed camera position, this should be consistent
-  const scale = 0.5; // Scale down from image pixels to tldraw coordinates
-  const offsetX = 0;   // No offset since we start at 0,0
-  const offsetY = 0;
+  console.log('Converting coordinates:', {
+    annotation: { x: annotation.center_x, y: annotation.center_y },
+    imageSize: { width: imageWidth, height: imageHeight },
+    tldrawBounds: tldrawBounds,
+    exportScale: exportScale
+  });
   
-  const tldrawX = (annotation.center_x * scale) + offsetX;
-  const tldrawY = (annotation.center_y * scale) + offsetY;
+  // Step 1: Convert image pixels to normalized coordinates (0-1)
+  // The image is exactly what the user sees in their viewport
+  const normalizedX = annotation.center_x / imageWidth;
+  const normalizedY = annotation.center_y / imageHeight;
+  
+  console.log('Normalized coords:', { x: normalizedX, y: normalizedY });
+  
+  // Step 2: Apply to viewport bounds to get exact tldraw coordinates
+  const tldrawX = tldrawBounds.x + (normalizedX * tldrawBounds.width);
+  const tldrawY = tldrawBounds.y + (normalizedY * tldrawBounds.height);
+  
+  console.log('Final tldraw coords:', { x: tldrawX, y: tldrawY });
+  
+  // Convert bounding box with same direct mapping
+  const bboxNormalizedXMin = annotation.bbox.x_min / imageWidth;
+  const bboxNormalizedYMin = annotation.bbox.y_min / imageHeight;
+  const bboxNormalizedXMax = annotation.bbox.x_max / imageWidth;
+  const bboxNormalizedYMax = annotation.bbox.y_max / imageHeight;
+  
+  const tldrawBbox = {
+    x_min: tldrawBounds.x + (bboxNormalizedXMin * tldrawBounds.width),
+    y_min: tldrawBounds.y + (bboxNormalizedYMin * tldrawBounds.height),
+    x_max: tldrawBounds.x + (bboxNormalizedXMax * tldrawBounds.width),
+    y_max: tldrawBounds.y + (bboxNormalizedYMax * tldrawBounds.height),
+  };
   
   return {
     center_x: tldrawX,
     center_y: tldrawY,
-    bbox: {
-      x_min: (annotation.bbox.x_min * scale) + offsetX,
-      y_min: (annotation.bbox.y_min * scale) + offsetY,
-      x_max: (annotation.bbox.x_max * scale) + offsetX,
-      y_max: (annotation.bbox.y_max * scale) + offsetY,
-    },
-    width: (annotation.bbox.x_max - annotation.bbox.x_min) * scale,
-    height: (annotation.bbox.y_max - annotation.bbox.y_min) * scale,
+    bbox: tldrawBbox,
+    width: tldrawBbox.x_max - tldrawBbox.x_min,
+    height: tldrawBbox.y_max - tldrawBbox.y_min,
   };
 }
 
+// Helper function to find specific text within an equation for precise highlighting
+function findSpecificTextInEquation(equation, highlightText, coordinateMapping) {
+  console.log('Looking for specific text:', highlightText, 'in equation:', equation.reconstructedText);
+  
+  // Clean the highlight text for better matching
+  const cleanHighlightText = highlightText.trim().toLowerCase();
+  
+  // Try to find the text in the equation
+  let matchingElements = [];
+  
+  // First, try exact sequence matching
+  const equationText = equation.reconstructedText.toLowerCase();
+  if (equationText.includes(cleanHighlightText)) {
+    // Find elements that form this text sequence
+    const words = cleanHighlightText.split(/\s+/);
+    let currentWordIndex = 0;
+    
+    for (let i = 0; i < equation.originalElements.length && currentWordIndex < words.length; i++) {
+      const element = equation.originalElements[i];
+      const elementText = element.text.toLowerCase().trim();
+      
+      if (elementText === words[currentWordIndex]) {
+        matchingElements.push(element);
+        currentWordIndex++;
+        
+        // If we found all words, break
+        if (currentWordIndex === words.length) {
+          break;
+        }
+      } else if (matchingElements.length > 0) {
+        // Reset if we break the sequence
+        matchingElements = [];
+        currentWordIndex = 0;
+        // Check if current element starts a new sequence
+        if (elementText === words[0]) {
+          matchingElements.push(element);
+          currentWordIndex = 1;
+        }
+      }
+    }
+  }
+  
+  // If exact sequence didn't work, try individual word matching
+  if (matchingElements.length === 0) {
+    const words = cleanHighlightText.split(/\s+/);
+    for (const word of words) {
+      for (const element of equation.originalElements) {
+        if (element.text.toLowerCase().trim() === word) {
+          matchingElements.push(element);
+          break; // Only add the first occurrence of each word
+        }
+      }
+    }
+  }
+  
+  console.log('Found matching elements:', matchingElements.map(e => e.text));
+  
+  if (matchingElements.length > 0) {
+    // Calculate bounding box for all matching elements
+    const minX = Math.min(...matchingElements.map(el => el.bbox.x_min));
+    const minY = Math.min(...matchingElements.map(el => el.bbox.y_min));
+    const maxX = Math.max(...matchingElements.map(el => el.bbox.x_max));
+    const maxY = Math.max(...matchingElements.map(el => el.bbox.y_max));
+    
+    const combinedBbox = {
+      x_min: minX,
+      y_min: minY,
+      x_max: maxX,
+      y_max: maxY
+    };
+    
+    console.log('Combined bbox for highlighted text:', combinedBbox);
+    
+    // Convert to tldraw coordinates
+    const tldrawBbox = convertImageToTldrawCoords({
+      center_x: (minX + maxX) / 2,
+      center_y: (minY + maxY) / 2,
+      bbox: combinedBbox
+    }, coordinateMapping).bbox;
+    
+    return {
+      type: 'specific_text_highlight',
+      bbox: tldrawBbox,
+      padding: 10,
+      matchedText: highlightText,
+      elements: matchingElements.map(el => el.text)
+    };
+  }
+  
+  return null; // No specific text found
+}
+
 // Generate AI suggestions using Gemini
-async function generateAISuggestions(fullText, spatialAnalysis, wordAnnotations, coordinateMapping) {
+async function generateAISuggestions(fullText, spatialAnalysis, wordAnnotations, coordinateMapping, verticalTextOrder) {
   try {
     console.log('Initializing Gemini model...');
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
@@ -239,6 +406,11 @@ async function generateAISuggestions(fullText, spatialAnalysis, wordAnnotations,
     
     // Prepare context for Gemini
     const analysisContext = {
+      // Easy-to-read vertical text order
+      textInVerticalOrder: verticalTextOrder.linesInOrder,
+      summary: verticalTextOrder.summary,
+      
+      // Technical details
       detectedText: fullText,
       equations: spatialAnalysis.equations.map(eq => ({
         text: eq.reconstructedText,
@@ -249,29 +421,55 @@ async function generateAISuggestions(fullText, spatialAnalysis, wordAnnotations,
     };
     
     const prompt = `
-You are an AI tutor analyzing a whiteboard with mathematical content. Based on the OCR analysis below, provide helpful feedback and suggestions.
 
-DETECTED CONTENT:
-${JSON.stringify(analysisContext, null, 2)}
+You are an expert math tutor reviewing a student's work on a whiteboard. The student is solving step-by-step, and you should  provide feedback like you are a really good teacher and guide them towards the correct answer by building thier intution.
 
-Please provide specific, actionable feedback as a JSON array. Each suggestion should have:
-- type: "text" for text suggestions, "arrow" for directional hints
-- text: the suggestion text (keep it concise, under 50 characters)
-- priority: "high", "medium", or "low"
-- category: "correction", "clarification", "next_step", or "encouragement"
-- associatedEquation: index of the equation this relates to (if applicable)
+STUDENT'S WORK (in order from top to bottom):
+${verticalTextOrder.linesInOrder.map((line, index) => `Step ${index + 1}: ${line}`).join('\n')}
 
-Focus on:
-1. Mathematical errors or potential improvements
-2. Missing steps in calculations
-3. Clarifications needed
-4. Next logical steps
-5. Encouragement for good work
+Treat this as a brandnew screen shot and analyze top down from scatch. Don't take into considiration jsons or screenshots before this
 
-Respond ONLY with valid JSON array, no additional text.
-`;
+CRITICAL INSTRUCTIONS:
+
+
+2. **Read the math carefully** - Make sure you understand what the student actually wrote before commenting.
+
+3. **Follow the logical progression** - Each line builds on the previous one. Check if their steps make mathematical sense.
+
+4. **Maximum 1 comment** - Only the most important feedback.
+
+5. **Be specific and brief** - Point to exactly what needs fixing, not general advice.
+
+6. If they are stuck help guide them towards the next step, but never give them the answer 
+
+
+ANALYSIS GUIDELINES:
+- If they wrote "3x + 2 = 10" and then "3x = 8", that's CORRECT (subtracting 2 from both sides)
+- If they wrote "x = 8/3", that's CORRECT (dividing both sides by 3)
+- Don't suggest steps they've already completed correctly
+
+If everything looks correct, return an empty array: []
+
+If there's an error, return ONLY ONE suggestion in this format:
+[{
+  "type": "text",
+  "text": "Specific error description",
+  "priority": "high",
+  "category": "correction",
+  "associatedEquation": 0,
+  "highlightText": "specific text to highlight"
+}]
+
+The "highlightText" field should contain the EXACT text from the student's work that you're referring to (e.g., "3x = 8" or "x = 8/3"). This will be highlighted on the whiteboard.
+
+OUTPUT ONLY THE JSON ARRAY, NO OTHER TEXT.`;
 
     console.log('Sending request to Gemini...');
+    console.log('Text being analyzed by AI:');
+    verticalTextOrder.linesInOrder.forEach((line, index) => {
+      console.log(`  Step ${index + 1}: "${line}"`);
+    });
+    
     const result = await model.generateContent(prompt);
     console.log('Gemini response received');
     const response = await result.response;
@@ -303,7 +501,7 @@ Respond ONLY with valid JSON array, no additional text.
       ];
     }
     
-    // Add positioning information to suggestions with better spacing
+    // Add positioning information to suggestions with better spacing and highlighting
     const positionedSuggestions = [];
     const usedPositions = []; // Track used positions to avoid overlaps
     
@@ -311,8 +509,10 @@ Respond ONLY with valid JSON array, no additional text.
       let tldraw_coords = null;
       let arrowStart = null;
       let arrowEnd = null;
+      let highlightRegion = null;
       
       if (suggestion.associatedEquation !== null && 
+          suggestion.associatedEquation !== undefined &&
           spatialAnalysis.equations[suggestion.associatedEquation]) {
         // Position near the specific equation
         const equation = spatialAnalysis.equations[suggestion.associatedEquation];
@@ -325,65 +525,56 @@ Respond ONLY with valid JSON array, no additional text.
         if (coordinateMapping) {
           const equationTldraw = convertImageToTldrawCoords(equationCenter, coordinateMapping);
           
-          // Calculate suggestion position with better spacing
-          const suggestionWidth = suggestion.text.length * 8 + 40; // Approximate width
-          const suggestionHeight = 40;
+          // Position suggestion to the right of the equation with some offset
+          tldraw_coords = {
+            x: equationTldraw.center_x + 200, // Right of equation
+            y: equationTldraw.center_y - 25 + (index * 80) // Slight offset up, stacked if multiple
+          };
           
-          // Try different positions around the equation to avoid overlaps
-          const positions = [
-            { x: equationTldraw.center_x + 150, y: equationTldraw.center_y - 50 }, // Right-up
-            { x: equationTldraw.center_x + 150, y: equationTldraw.center_y + 50 }, // Right-down
-            { x: equationTldraw.center_x - 150, y: equationTldraw.center_y - 50 }, // Left-up
-            { x: equationTldraw.center_x - 150, y: equationTldraw.center_y + 50 }, // Left-down
-            { x: equationTldraw.center_x, y: equationTldraw.center_y - 100 }, // Above
-            { x: equationTldraw.center_x, y: equationTldraw.center_y + 100 }, // Below
-          ];
-          
-          // Find first position that doesn't overlap
-          let chosenPosition = positions[0];
-          for (const pos of positions) {
-            let overlaps = false;
-            for (const usedPos of usedPositions) {
-              const distance = Math.sqrt(Math.pow(pos.x - usedPos.x, 2) + Math.pow(pos.y - usedPos.y, 2));
-              if (distance < 120) { // Minimum distance between suggestions
-                overlaps = true;
-                break;
-              }
-            }
-            if (!overlaps) {
-              chosenPosition = pos;
-              break;
-            }
+          // Create highlight region for the equation or specific text being referenced
+          if (suggestion.highlightText) {
+            // Try to find the specific text within the equation and highlight just that part
+            const specificTextHighlight = findSpecificTextInEquation(equation, suggestion.highlightText, coordinateMapping);
+            highlightRegion = specificTextHighlight || {
+              type: 'equation_highlight',
+              bbox: convertImageToTldrawCoords({
+                center_x: (equation.boundingBox.x_min + equation.boundingBox.x_max) / 2,
+                center_y: (equation.boundingBox.y_min + equation.boundingBox.y_max) / 2,
+                bbox: equation.boundingBox
+              }, coordinateMapping).bbox,
+              padding: 15,
+              equationIndex: suggestion.associatedEquation
+            };
+          } else {
+            // Highlight the entire equation
+            highlightRegion = {
+              type: 'equation_highlight',
+              bbox: convertImageToTldrawCoords({
+                center_x: (equation.boundingBox.x_min + equation.boundingBox.x_max) / 2,
+                center_y: (equation.boundingBox.y_min + equation.boundingBox.y_max) / 2,
+                bbox: equation.boundingBox
+              }, coordinateMapping).bbox,
+              padding: 15, // Extra padding around the text
+              equationIndex: suggestion.associatedEquation
+            };
           }
-          
-          tldraw_coords = chosenPosition;
-          usedPositions.push(chosenPosition);
-          
-          // Create arrow pointing from suggestion to equation
-          arrowStart = { x: tldraw_coords.x, y: tldraw_coords.y };
-          arrowEnd = { x: equationTldraw.center_x, y: equationTldraw.center_y };
         }
       } else {
-        // Position general suggestions in a grid pattern
-        const suggestionsPerRow = 3;
-        const row = Math.floor(index / suggestionsPerRow);
-        const col = index % suggestionsPerRow;
-        
-        const baseX = coordinateMapping ? coordinateMapping.tldrawBounds.x + 100 : 100;
-        const baseY = coordinateMapping ? coordinateMapping.tldrawBounds.y - 100 : 50;
+        // For general suggestions, position them at the bottom of the whiteboard area
+        const baseX = coordinateMapping ? coordinateMapping.tldrawBounds.x + 50 : 50;
+        const baseY = coordinateMapping ? coordinateMapping.tldrawBounds.y + coordinateMapping.tldrawBounds.height - 100 : 600;
         
         tldraw_coords = {
-          x: baseX + (col * 200), // 200px spacing between columns
-          y: baseY + (row * 80)   // 80px spacing between rows
+          x: baseX + (index * 250),
+          y: baseY + (index * 60)
         };
-        
-        usedPositions.push(tldraw_coords);
       }
       
-      // Add the text suggestion
+      // Add the text suggestion with highlight information
       positionedSuggestions.push({
         ...suggestion,
-        tldraw_coords: tldraw_coords
+        tldraw_coords: tldraw_coords,
+        highlightRegion: highlightRegion
       });
       
       // Add arrow if pointing to an equation
