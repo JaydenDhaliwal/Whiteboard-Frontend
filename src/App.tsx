@@ -57,12 +57,12 @@ export default function App() {
     // Prevent running if services are already initialized or keys are missing/placeholders.
     if (contextProvider || isKeyPlaceholder || !VAPI_PUBLIC_KEY || !VAPI_ASSISTANT_ID) {
       if (isKeyPlaceholder) {
-        console.warn("Gemini API key is a placeholder. Services will not be initialized.");
+        console.warn("⚠️ Gemini API key is a placeholder. Services will not be initialized.");
       }
       return;
     }
 
-    console.log("API keys found. Initializing services...");
+    console.log("🚀 API keys found. Initializing services...");
 
     const vapiConfig: VAPIConfig = {
       apiKey: VAPI_PUBLIC_KEY,
@@ -105,60 +105,34 @@ export default function App() {
     }
   }, [editor, contextProvider, vapiService]);
 
-  const getWhiteboardOcrData = useCallback(async (currentEditor: Editor) => {
-    if (!currentEditor) return null;
-    const shapeIds = currentEditor.getCurrentPageShapeIds();
-    if (shapeIds.size === 0) return null;
-
-    const svgResult = await currentEditor.getSvgString([...shapeIds]);
-    if (!svgResult?.svg) return null;
-
-    const base64data = btoa(svgResult.svg); // Use btoa for direct SVG to base64
-
-    const backend_url = 'http://localhost:3001';
-    try {
-      const response = await fetch(`${backend_url}/api/ocr-vision`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageData: base64data }),
-      });
-      if (!response.ok) throw new Error(`Backend request failed: ${response.statusText}`);
-      return await response.json();
-    } catch (error) {
-      console.error("Error fetching OCR results:", error);
-      alert("Error communicating with the backend. See console.");
-      return null;
-    }
-  }, []);
-
   const handleAnalyzeAndStartTutor = useCallback(async () => {
     if (!editor || !vapiService || !contextProvider) {
       alert("Services are not ready. Please add your Gemini API key to `src/App.tsx` and refresh.");
       return;
     }
 
-    console.log("Starting analysis to generate educational context (manual trigger)...");
+    console.log("📝 Starting analysis to generate educational context (manual trigger)...");
     const ocrData = await OCRService.processWhiteboard(editor);
 
     if (ocrData) {
-      console.log("Received OCR data, processing with Gemini to generate context...", ocrData);
+      console.log("📊 Received OCR data, processing with Gemini to generate context...", ocrData);
       const contextResult = await contextProvider.generateContext(ocrData);
 
       if (contextResult.success && contextResult.context) {
         const context = contextResult.context;
-        console.log("Educational context generated:", context);
+        console.log("🎓 Educational context generated:", context);
         
         // This is a simplified context for the manual trigger.
         // The automatic tutor provides a much richer context.
-        const vapiContext = `The user has started a tutoring session. They have written: "${context.content_analysis.student_wrote}". Please greet them and ask how you can help.`;
+        const vapiContext = `The user has started a tutoring session. They have written: "${context.content_analysis.student_wrote}". Please greet them naturally and ask how you can help.`;
 
         await vapiService.startCall(VAPI_ASSISTANT_ID, vapiContext);
       } else {
         alert(`Failed to create an educational context. Error: ${contextResult.error}`);
       }
     } else {
-      console.log("No content on whiteboard. Starting a generic VAPI session.");
-      await vapiService.startCall(VAPI_ASSISTANT_ID, "The user started a session with a blank whiteboard. Please greet them.");
+      console.log("📄 No content on whiteboard. Starting a generic VAPI session.");
+      await vapiService.startCall(VAPI_ASSISTANT_ID, "The user started a session with a blank whiteboard. Please greet them naturally.");
     }
   }, [editor, vapiService, contextProvider]);
   
@@ -181,4 +155,4 @@ export default function App() {
       </div>
     </>
   );
-} 
+}
