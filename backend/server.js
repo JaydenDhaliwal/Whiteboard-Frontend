@@ -222,49 +222,64 @@ function analyzeEquation(equationElements) {
 function createVerticalTextOrder(wordAnnotations) {
   console.log('Creating vertical text order...');
   
-  // Sort all annotations by Y coordinate (top to bottom), then by X coordinate (left to right)
-  // Use a more robust sorting that accounts for reading order
-  const sortedAnnotations = [...wordAnnotations].sort((a, b) => {
-    const yDiff = a.center_y - b.center_y;
-    const yTolerance = 30; // Slightly larger tolerance
+  // First, group annotations into clear lines based on Y coordinates
+  const lineGroups = [];
+  const usedAnnotations = new Set();
+  
+  // Sort by Y coordinate first to process top to bottom
+  const yOrderedAnnotations = [...wordAnnotations].sort((a, b) => a.center_y - b.center_y);
+  
+  yOrderedAnnotations.forEach(annotation => {
+    if (usedAnnotations.has(annotation)) return;
     
-    if (Math.abs(yDiff) < yTolerance) { // If on roughly the same line
-      return a.center_x - b.center_x; // Sort left to right
-    }
-    return yDiff; // Sort top to bottom
-  });
-  
-  // Group into lines for better readability
-  const lines = [];
-  let currentLine = [];
-  let lastY = null;
-  const lineGroupingTolerance = 35; // Larger tolerance for grouping into lines
-  
-  sortedAnnotations.forEach(annotation => {
-    if (lastY === null || Math.abs(annotation.center_y - lastY) < lineGroupingTolerance) {
-      // Same line or first annotation
-      currentLine.push(annotation.text);
-      lastY = annotation.center_y;
-    } else {
-      // New line
-      if (currentLine.length > 0) {
-        lines.push(currentLine.join(' '));
+    // Start a new line group
+    const lineGroup = [annotation];
+    usedAnnotations.add(annotation);
+    
+    // Find all other annotations on roughly the same Y level
+    yOrderedAnnotations.forEach(other => {
+      if (usedAnnotations.has(other)) return;
+      
+      if (Math.abs(annotation.center_y - other.center_y) < 35) {
+        lineGroup.push(other);
+        usedAnnotations.add(other);
       }
-      currentLine = [annotation.text];
-      lastY = annotation.center_y;
-    }
+    });
+    
+    // Sort this line group left to right
+    lineGroup.sort((a, b) => a.center_x - b.center_x);
+    lineGroups.push(lineGroup);
   });
   
-  // Add the last line
-  if (currentLine.length > 0) {
-    lines.push(currentLine.join(' '));
-  }
+  // Flatten back to sorted annotations
+  const sortedAnnotations = lineGroups.flat();
   
-  console.log('Vertical text order created:', lines);
-  console.log('Individual annotations with coordinates:');
+  // Convert line groups to text lines
+  const lines = lineGroups.map(lineGroup => 
+    lineGroup.map(annotation => annotation.text).join(' ')
+  );
+  
+  console.log(`Detected ${lineGroups.length} distinct lines:`);
+  
+  console.log('=== TEXT ORDERING DEBUG ===');
+  console.log('Raw annotations (unsorted):');
+  wordAnnotations.forEach((annotation, index) => {
+    console.log(`  ${index}: "${annotation.text}" at Y=${Math.round(annotation.center_y)}, X=${Math.round(annotation.center_x)}`);
+  });
+  
+  console.log('Sorted annotations (top to bottom):');
   sortedAnnotations.forEach((annotation, index) => {
     console.log(`  ${index}: "${annotation.text}" at Y=${Math.round(annotation.center_y)}, X=${Math.round(annotation.center_x)}`);
   });
+  
+  console.log('Final line order with Y coordinates:');
+  lines.forEach((line, index) => {
+    const avgY = lineGroups[index].reduce((sum, ann) => sum + ann.center_y, 0) / lineGroups[index].length;
+    console.log(`  Line ${index} (Y=${Math.round(avgY)}): "${line}"`);
+  });
+  
+  console.log(`MOST RECENT STEP identified as: "${lines[lines.length - 1]}"`);
+  console.log('=== END DEBUG ===');
   
   return {
     linesInOrder: lines,
@@ -460,6 +475,8 @@ CRITICAL INSTRUCTIONS:
 
 6. If they are stuck help guide them towards the next step, but never give them the answer 
 
+7. If it's a factoring problem (polynomial equation) always factor the equation. 
+
 
 ANALYSIS GUIDELINES:
 - If they wrote "3x + 2 = 10" and then "3x = 8", that's CORRECT (subtracting 2 from both sides)
@@ -487,6 +504,8 @@ OUTPUT ONLY THE JSON ARRAY, NO OTHER TEXT.`;
     verticalTextOrder.linesInOrder.forEach((line, index) => {
       console.log(`  Step ${index + 1}: "${line}"`);
     });
+    console.log(`EMPHASIZING MOST RECENT STEP: "${verticalTextOrder.linesInOrder[verticalTextOrder.linesInOrder.length - 1]}"`);
+    console.log(`Total equations detected: ${spatialAnalysis.equations.length}`);
     
     const result = await model.generateContent(prompt);
     console.log('Gemini response received');
