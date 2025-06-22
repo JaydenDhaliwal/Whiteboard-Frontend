@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>JSON Export Test</title>
+</head>
+<body>
+    <h1>JSON Export Test</h1>
+    <button onclick="testJSONExport()">Test JSON Export</button>
+    <button onclick="testSimpleJSON()">Test Simple JSON</button>
+    
+    <script>
+        function testJSONExport() {
+            console.log("Testing JSON export...");
+            
+            const testData = {
+                test: "Hello World",
+                timestamp: new Date().toISOString(),
+                numbers: [1, 2, 3],
+                nested: {
+                    value: "test",
+                    array: ["a", "b", "c"]
+                }
+            };
+            
+            try {
+                const jsonString = JSON.stringify(testData, null, 2);
+                console.log("JSON string created:", jsonString);
+                
+                const blob = new Blob([jsonString], { 
+                    type: 'application/json;charset=utf-8' 
+                });
+                
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'test-export.json';
+                
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                
+                setTimeout(() => URL.revokeObjectURL(url), 100);
+                
+                console.log("Test JSON export completed");
+                alert("Test JSON file should have downloaded");
+            } catch (error) {
+                console.error("Error in test export:", error);
+                alert("Error: " + error.message);
+            }
+        }
+        
+        function testSimpleJSON() {
+            console.log("Testing simple JSON...");
+            
+            const simpleData = {
+                message: "This is a simple test",
+                success: true
+            };
+            
+            const jsonString = JSON.stringify(simpleData, null, 2);
+            const blob = new Blob([jsonString], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'simple-test.json';
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            alert("Simple JSON test completed");
+        }
+    </script>
+</body>
+</html> 

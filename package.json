@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@google-cloud/vision": "^5.2.0",
+    "@google/generative-ai": "^0.24.1",
     "@tldraw/tldraw": "^2.0.0-alpha.17",
     "cors": "^2.8.5",
     "express": "^5.1.0",

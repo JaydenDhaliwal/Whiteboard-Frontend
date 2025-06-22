@@ -11,6 +11,9 @@ A simple and modern whiteboard application built with React, TypeScript, and tld
 - 📱 Responsive design
 - 🌈 Color picker and style options
 - 🔍 Zoom and pan functionality
+- 🤖 **AI-Powered OCR Analysis** - Extract text from your whiteboard and get intelligent feedback
+- 🧮 **Mathematical Analysis** - AI suggestions for math equations and calculations
+- 📊 **Smart Positioning** - AI suggestions positioned contextually on your whiteboard
 
 ## Getting Started
 
@@ -25,18 +28,49 @@ A simple and modern whiteboard application built with React, TypeScript, and tld
 2. Install dependencies:
    ```bash
    npm install
+   cd backend
+   npm install
    ```
+
+### API Keys Setup
+
+To enable AI features, you'll need to set up API keys:
+
+1. **Google Cloud Vision API**: Place your service account JSON file in the `backend/` directory
+2. **Gemini AI API**: 
+   - Get your API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+   - In the `backend/` directory, create a `.env` file:
+     ```
+     GEMINI_API_KEY=your-gemini-api-key-here
+     ```
 
 ### Running the Application
 
-1. Start the development server:
+1. Start the backend server:
+   ```bash
+   cd backend
+   node server.js
+   ```
+
+2. In a new terminal, start the frontend development server:
    ```bash
    npm run dev
    ```
 
-2. Open your browser and navigate to `http://localhost:3000`
+3. Open your browser and navigate to `http://localhost:5173`
 
-3. Start drawing on your whiteboard!
+4. Start drawing on your whiteboard!
+
+### Using AI Features
+
+1. Draw some mathematical content on your whiteboard (equations, numbers, text)
+2. Click the "Process Whiteboard (OCR)" button
+3. The AI will:
+   - Extract all text from your whiteboard
+   - Analyze mathematical expressions
+   - Generate intelligent suggestions and feedback
+   - Position these suggestions contextually on your whiteboard
+   - Download a detailed JSON analysis file
 
 ### Building for Production
 

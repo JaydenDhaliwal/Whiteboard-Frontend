@@ -2,18 +2,115 @@ import React, { useState } from 'react';
 import { Tldraw, Editor, TLGeoShape, TLTextShape, TLUiOverrides } from '@tldraw/tldraw';
 import '@tldraw/tldraw/tldraw.css';
 
-// Override to disable camera controls
+const DEFAULT_CAMERA_STEPS = [0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8];
+
+// UI overrides to lock camera zoom and pan - defined outside component to avoid re-creation
 const uiOverrides: TLUiOverrides = {
-  tools: (editor, tools) => {
-    // Remove zoom and pan tools
-    const { hand, ...restTools } = tools;
-    return restTools;
+  actions(editor, actions) {
+    actions.lockCameraZoom = {
+      id: 'lock-camera-zoom',
+      kbd: 'shift+k',
+      onSelect() {
+        const isCameraZoomLockedAlready = editor.getCameraOptions().zoomSteps.length === 1
+        editor.setCameraOptions({
+          zoomSteps: isCameraZoomLockedAlready ? DEFAULT_CAMERA_STEPS : [editor.getZoomLevel()],
+        })
+      },
+    }
+    return actions
   },
 };
 
 // New component to encapsulate the OCR button logic
 interface OCRButtonProps {
   editor: Editor | null;
+}
+
+// Helper function to draw AI suggestions back onto the whiteboard
+function drawAISuggestions(editor: Editor, suggestions: any[]) {
+  console.log("Drawing AI suggestions:", suggestions);
+  
+  suggestions.forEach((suggestion, index) => {
+    if (suggestion.type === 'text' && suggestion.tldraw_coords) {
+      // Choose color based on priority and category
+      let color = 'red'; // default
+      let size = 'm'; // default
+      
+      switch (suggestion.priority) {
+        case 'high':
+          color = 'red';
+          size = 'l';
+          break;
+        case 'medium':
+          color = 'orange';
+          size = 'm';
+          break;
+        case 'low':
+          color = 'blue';
+          size = 's';
+          break;
+      }
+      
+      // Different styling for different categories
+      switch (suggestion.category) {
+        case 'correction':
+          color = 'red';
+          break;
+        case 'clarification':
+          color = 'orange';
+          break;
+        case 'next_step':
+          color = 'blue';
+          break;
+        case 'encouragement':
+          color = 'green';
+          break;
+      }
+      
+      editor.createShape({
+        type: 'text',
+        x: suggestion.tldraw_coords.x,
+        y: suggestion.tldraw_coords.y,
+        props: {
+          text: suggestion.text,
+          size: size,
+          color: color,
+        },
+      });
+      
+      // Add a small rectangle background for better visibility
+      editor.createShape({
+        type: 'geo',
+        x: suggestion.tldraw_coords.x - 10,
+        y: suggestion.tldraw_coords.y - 10,
+        props: {
+          geo: 'rectangle',
+          w: suggestion.text.length * 8 + 20, // Approximate width based on text length
+          h: 35,
+          color: color,
+          fill: 'none',
+          dash: 'dashed',
+          size: 's',
+        },
+      });
+    } else if (suggestion.type === 'arrow' && suggestion.arrowStart && suggestion.arrowEnd) {
+      // Draw arrow from suggestion to equation
+      editor.createShape({
+        type: 'arrow',
+        x: suggestion.arrowStart.x,
+        y: suggestion.arrowStart.y,
+        props: {
+          start: { x: 0, y: 0 },
+          end: { 
+            x: suggestion.arrowEnd.x - suggestion.arrowStart.x, 
+            y: suggestion.arrowEnd.y - suggestion.arrowStart.y 
+          },
+          color: 'orange', // Arrow color
+          size: 'm',
+        },
+      });
+    }
+  });
 }
 
 function OCRButton({ editor }: OCRButtonProps) {
@@ -36,11 +133,18 @@ function OCRButton({ editor }: OCRButtonProps) {
         return;
       }
 
+      // Use page bounds for consistent coordinate mapping
+      const camera = editor.getCamera();
+      const pageBounds = editor.getCurrentPageBounds();
+      
+      console.log("Camera:", camera);
+      console.log("Page bounds:", pageBounds);
+
       // Use tldraw's export functionality to get an image blob
       // This uses the same underlying mechanism as the screenshot tool
       const svgResult = await editor.getSvgString([...shapeIds], {
         background: true,
-        bounds: editor.getSelectionPageBounds() || editor.getCurrentPageBounds(),
+        bounds: pageBounds,
         scale: 2,
         darkMode: false,
       });
@@ -70,30 +174,113 @@ function OCRButton({ editor }: OCRButtonProps) {
                 const base64data = (reader.result as string).split(',')[1];
                 console.log("Image captured and converted to Base64 (first 100 chars):", base64data.substring(0, 100) + '...');
 
-                // Send to backend
+                // Send to backend with coordinate mapping information
                 try {
                   const backend_url = 'http://localhost:3001';
+                  const coordinateMapping = {
+                    // Image dimensions
+                    imageWidth: canvas.width,
+                    imageHeight: canvas.height,
+                    // Tldraw coordinate bounds that correspond to this image
+                    tldrawBounds: pageBounds ? {
+                      x: pageBounds.x,
+                      y: pageBounds.y,
+                      width: pageBounds.w,
+                      height: pageBounds.h,
+                    } : {
+                      x: 0,
+                      y: 0,
+                      width: 1600,
+                      height: 900,
+                    },
+                    // Scale factor used in export
+                    exportScale: 2,
+                    // Camera information for reference
+                    camera: camera,
+                    // Timestamp for reference
+                    timestamp: new Date().toISOString(),
+                  };
+                  
+                  console.log("Coordinate mapping:", coordinateMapping);
+                  
                   const response = await fetch(`${backend_url}/api/ocr-vision`, {
                     method: 'POST',
                     headers: {
                       'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ imageData: base64data }),
+                    body: JSON.stringify({ 
+                      imageData: base64data,
+                      coordinateMapping: coordinateMapping 
+                    }),
                   });
                   const ocrResults = await response.json();
                   console.log("OCR Results from Backend:", ocrResults);
                   
-                  // Save the complete JSON to a file
-                  const jsonString = JSON.stringify(ocrResults, null, 2);
-                  const blob = new Blob([jsonString], { type: 'application/json' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `ocr-results-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-                  a.click();
-                  URL.revokeObjectURL(url);
+                  // Draw AI suggestions if available
+                  if (ocrResults.aiSuggestions && ocrResults.aiSuggestions.length > 0) {
+                    console.log("Drawing AI suggestions:", ocrResults.aiSuggestions.length);
+                    drawAISuggestions(editor, ocrResults.aiSuggestions);
+                  }
                   
-                  alert(`OCR processing complete! Found ${ocrResults.wordAnnotations?.length || 0} text elements. JSON file downloaded. Check console for detailed results.`);
+                  // Save the complete JSON to a file with better error handling
+                  try {
+                    // Clean the data to remove any problematic characters or circular references
+                    const cleanedResults = JSON.parse(JSON.stringify(ocrResults));
+                    const jsonString = JSON.stringify(cleanedResults, null, 2);
+                    console.log("JSON string length:", jsonString.length);
+                    console.log("JSON preview (first 500 chars):", jsonString.substring(0, 500));
+                    
+                    // Validate JSON structure before creating blob
+                    try {
+                      JSON.parse(jsonString); // Test if it's valid JSON
+                      console.log("JSON validation passed");
+                    } catch (validationError) {
+                      console.error("JSON validation failed:", validationError);
+                      throw new Error("Generated JSON is invalid");
+                    }
+                    
+                    // Create blob with explicit UTF-8 encoding and BOM for better compatibility
+                    const bom = '\uFEFF'; // UTF-8 BOM
+                    const blob = new Blob([bom + jsonString], { 
+                      type: 'application/json;charset=utf-8' 
+                    });
+                    
+                    console.log("Blob created, size:", blob.size, "type:", blob.type);
+                    
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    
+                    // Simplify filename to avoid special characters
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('.')[0];
+                    a.download = `ocr-results-${timestamp}.json`;
+                    
+                    console.log("Download filename:", a.download);
+                    
+                    // Add the element to DOM, click, then remove
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    
+                    // Clean up the URL after a longer delay to ensure download completes
+                    setTimeout(() => {
+                      URL.revokeObjectURL(url);
+                      console.log("URL revoked");
+                    }, 1000);
+                    
+                    console.log("JSON file download initiated successfully");
+                  } catch (jsonError) {
+                    console.error("Error creating JSON file:", jsonError);
+                    console.error("Error details:", {
+                      message: jsonError instanceof Error ? jsonError.message : String(jsonError),
+                      stack: jsonError instanceof Error ? jsonError.stack : undefined,
+                      ocrResultsKeys: Object.keys(ocrResults || {}),
+                      ocrResultsType: typeof ocrResults
+                    });
+                    alert("Error creating JSON file. Check console for details.");
+                  }
+                  
+                  alert(`OCR processing complete! Found ${ocrResults.wordAnnotations?.length || 0} text elements. ${ocrResults.aiSuggestions?.length || 0} AI suggestions added to whiteboard. JSON file downloaded.`);
                 } catch (error) {
                   console.error("Error sending image for OCR:", error);
                   alert("Failed to process whiteboard with OCR. Check console for details.");
@@ -233,15 +420,64 @@ function App() {
         </button>
         {/* Render the OCRButton directly, passing the editor prop */}
         {editor && <OCRButton editor={editor} />} {/* Only render if editor is available */}
+
       </header>
       
       <div className="whiteboard-container">
         <Tldraw 
           className="tldraw-container"
           overrides={uiOverrides}
+          components={{
+            HelpMenu: null,
+            MainMenu: null,
+          }}
           onMount={(editor) => {
             console.log("Tldraw Editor mounted:", editor);
-            setEditor(editor);
+            // Defer setEditor to next tick to avoid infinite loop
+            requestAnimationFrame(() => setEditor(editor));
+            
+            // Use camera constraints to control zoom and pan behavior
+            setTimeout(() => {
+              try {
+                const viewportBounds = editor.getViewportPageBounds();
+                const constraintBounds = {
+                  x: 0,
+                  y: 0,
+                  w: 1600, // Fixed canvas width
+                  h: 900,  // Fixed canvas height
+                };
+
+                editor.setCameraOptions({
+                  constraints: {
+                    bounds: constraintBounds,
+                    behavior: 'contain',
+                    initialZoom: 'fit-max',
+                    baseZoom: 'fit-max', // Lock to this zoom level
+                    origin: { x: 0.5, y: 0.5 },
+                    padding: { x: 50, y: 50 },
+                  },
+                });
+
+                // Zoom to fit the constraint bounds
+                editor.zoomToBounds(constraintBounds, { 
+                  force: true, 
+                  animation: { duration: 500 } 
+                });
+                
+                // Auto-trigger zoom lock (equivalent to pressing Shift+K)
+                setTimeout(() => {
+                  const currentZoom = editor.getZoomLevel();
+                  editor.setCameraOptions({
+                    zoomSteps: [currentZoom], // Lock to current zoom level
+                  });
+                  console.log("Zoom locked automatically at level:", currentZoom);
+                }, 100); // Small delay after zoom animation
+                
+                console.log("Camera constraints applied successfully");
+              } catch (error) {
+                console.log("Could not apply camera constraints:", error);
+              }
+            }, 1000); // 1 second delay to ensure editor is fully initialized
           }}
         />
       </div>
